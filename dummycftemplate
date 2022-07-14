@@ -282,7 +282,35 @@ Resources:
           Key: StackName
           Value: !Ref AWS::StackName
       Type: network
-  
+           TestRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+        RepositoryPolicyText:
+            Version: '2012-10-17'
+            Statement:
+                - Effect: Allow
+                  Principal:
+                    AWS:
+                      -arn:aws:iam::760205294963:user/bob          
+                - Effect: AllowDDS
+                  Action:
+                    - 'ecr:GetAuthorizationToken'
+                  Resource: '*'
+                - Effect: Allow
+                  Action:
+                    - 'ecr:BatchCheckLayerAvailability'
+                    - 'ecr:GetDownloadUrlForLayer'
+                    - 'ecr:GetRepositoryPolicy'
+                    - 'ecr:DescribeRepositories'
+                    - 'ecr:ListImages'
+                    - 'ecr:DescribeImages'
+                    - 'ecr:BatchGetImage'
+                    - 'ecr:InitiateLayerUpload'
+                    - 'ecr:UploadLayerPart'
+                    - 'ecr:CompleteLayerUpload'
+                    - 'ecr:PutImage'
+                  Resource: 'arn:aws:ecr:us-east-1:760205294963:repository/my-repo'
+                   
   
 # Deploy API GW VPC Link
 #---------------------------------------------------------------------
