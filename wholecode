@@ -1,0 +1,398 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Parameters:
+    VpcId:
+      Type: String
+      Description: VPC id
+      Default: vpc-0de9c2f5e9ab61159
+    PrivateSubnet1:
+      Type: String
+      Description: Subnet in which to launch an EC2
+      Default: subnet-0059f41cc6b762d0b	
+    PrivateSubnet2:
+      Type: String
+      Description: Subnet in which to launch an EC2
+      Default: subnet-0dcdb4672e0c56964
+    AvailabilityZone:
+      Type: String
+      Description: Availability Zone into which instance will launch
+      Default: us-west-1
+    ServicePrefix1:
+      Type: String
+      Default: Fargate-service1
+      Description: A name for the Fargate service
+    ServicePrefix2:
+      Type: String
+      Default: Fargate-service2
+      Description: A name for the Fargate service
+    RepositoryURI:
+      Type: String
+      Default: nginx
+      Description: The repository URI of the docker image that contains the application process that will handle the traffic for this service, ex. nginx
+    ContainerPort:
+      Type: Number
+      Default: 8080
+      Description: What port number the application inside the docker container is binding to
+    ContainerPort1:
+      Type: Number
+      Default: 8090
+      Description: What port number the application inside the docker container is binding to
+
+    ContainerCpu:
+      Type: String
+      Default: 1024
+      Description: How much CPU to give the container. 1024 is 1 CPU
+    ContainerCpucontainers:
+      Type: String
+      Default: 256
+      Description: How much CPU to give the container. 1024 is 1 CPU
+    ContainerMemory:
+      Type: String
+      Default: 2048
+      Description: How much memory in megabytes to give the container
+    DesiredCount:
+      Type: Number
+      Default: 1
+      Description: How many copies of the service task to run
+    SourceAccessCIDR:
+      Type: String
+      Description: The CIDR IP range that is permitted to access the running tasks. We recommend that you set this value to a trusted IP range.
+      Default: 0.0.0.0/0
+    VPCCIDR:
+      Type: String
+      Description: The CIDR IP range that is permitted to access the running tasks. We recommend that you set this value to a trusted IP range.
+      Default: 172.31.0.0/16
+    PrivateSubnet1CIDR:
+      Type: String
+      Description: The CIDR IP range that is permitted to access the running tasks. We recommend that you set this value to a trusted IP range.
+      Default: 172.31.0.0/20
+    PrivateSubnet2CIDR:
+      Type: String
+      Description: The CIDR IP range that is permitted to access the running tasks. We recommend that you set this value to a trusted IP range.
+      Default: 172.31.16.0/20
+    
+Resources:
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Cpu: !Ref ContainerCpu
+      Memory: !Ref ContainerMemory
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      ExecutionRoleArn: !Ref ECSTaskExecutionRole
+      TaskRoleArn: !Ref ECSRole
+      ContainerDefinitions:
+        - Name: !Join ['-', [!Ref ServicePrefix1, !Ref 'AWS::StackName']]
+          Cpu: !Ref ContainerCpucontainers
+          Memory: !Ref ContainerMemory
+          Image: !Ref RepositoryURI
+          PortMappings:
+            - ContainerPort: !Ref ContainerPort
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Join ['/', [ecs, !Join ['-', [!Ref ServicePrefix1, !Ref 'AWS::StackName']]]]
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+        - Name: !Join ['-', [!Ref ServicePrefix2, !Ref 'AWS::StackName']]
+          Cpu: !Ref ContainerCpucontainers
+          Memory: !Ref ContainerMemory
+          Image: !Ref RepositoryURI
+          PortMappings:
+            - ContainerPort: !Ref ContainerPort1
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Join ['/', [ecs, !Join ['-', [!Ref ServicePrefix2, !Ref 'AWS::StackName']]]]
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+
+       
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+  # The service. The service is a resource which allows you to run multiple
+  # copies of a type of task, and gather up their logs and metrics, as well
+  # as monitor the number of running tasks and replace any that have crashed
+  Service:
+    Type: AWS::ECS::Service
+    DependsOn: LoadBalancerListener
+    Properties:
+      ServiceName: !Join ['-', [!Ref ServicePrefix1, !Ref 'AWS::StackName']]
+      Cluster: !Ref ECSCluster
+      LaunchType: FARGATE
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 75
+      DesiredCount: !Ref DesiredCount
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          SecurityGroups:
+            - !Ref FargateContainerSecurityGroup
+          Subnets:
+            - !Ref PrivateSubnet1
+            - !Ref PrivateSubnet2
+      TaskDefinition: !Ref TaskDefinition
+      LoadBalancers:
+        - ContainerName: !Join ['-', [!Ref ServicePrefix1, !Ref 'AWS::StackName']]
+          ContainerPort: !Ref ContainerPort
+          TargetGroupArn: !Ref TargetGroup
+
+# This is an IAM role which authorizes ECS to manage resources on your
+# account on your behalf, such as updating your load balancer with the
+# details of where your containers are, so that traffic can reach your
+# containers.
+  ECSRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: [ecs.amazonaws.com]
+          Action: ['sts:AssumeRole']
+      Path: /
+      Policies:
+      - PolicyName: ecs-service
+        PolicyDocument:
+          Statement:
+          - Effect: Allow
+            Action:
+              # Rules which allow ECS to attach network interfaces to instances
+              # on your behalf in order for awsvpc networking mode to work right
+              - 'ec2:AttachNetworkInterface'
+              - 'ec2:CreateNetworkInterface'
+              - 'ec2:CreateNetworkInterfacePermission'
+              - 'ec2:DeleteNetworkInterface'
+              - 'ec2:DeleteNetworkInterfacePermission'
+              - 'ec2:Describe*'
+              - 'ec2:DetachNetworkInterface'
+
+              # Rules which allow ECS to update load balancers on your behalf
+              # with the information sabout how to send traffic to your containers
+              - 'elasticloadbalancing:DeregisterInstancesFromLoadBalancer'
+              - 'elasticloadbalancing:DeregisterTargets'
+              - 'elasticloadbalancing:Describe*'
+              - 'elasticloadbalancing:RegisterInstancesWithLoadBalancer'
+              - 'elasticloadbalancing:RegisterTargets'
+            Resource: '*'
+
+# This is a role which is used by the ECS tasks themselves.
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: [ecs-tasks.amazonaws.com]
+          Action: ['sts:AssumeRole']
+      Path: /
+      Policies:
+        - PolicyName: AmazonECSTaskExecutionRolePolicy
+          PolicyDocument:
+            Statement:
+            - Effect: Allow
+              Action:
+                # Allow the ECS Tasks to download images from ECR
+                - 'ecr:GetAuthorizationToken'
+                - 'ecr:BatchCheckLayerAvailability'
+                - 'ecr:GetDownloadUrlForLayer'
+                - 'ecr:BatchGetImage'
+
+                # Allow the ECS tasks to upload logs to CloudWatch
+                - 'logs:CreateLogStream'
+                - 'logs:PutLogEvents'
+              Resource: '*'
+# Fargate Security Groups
+  FargateContainerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Access to the Fargate containers
+      VpcId: !Ref VpcId
+  EcsSecurityGroupIngressFromVPC:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Ingress from external clients
+      GroupId: !Ref FargateContainerSecurityGroup
+      CidrIp: !Ref VPCCIDR
+      FromPort: !Ref ContainerPort
+      ToPort: !Ref ContainerPort
+      IpProtocol: tcp
+  EcsSecurityGroupIngressFromsubnet1:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Ingress from external clients
+      GroupId: !Ref FargateContainerSecurityGroup
+      CidrIp: !Ref PrivateSubnet1CIDR
+      FromPort: !Ref ContainerPort
+      ToPort: !Ref ContainerPort
+      IpProtocol: tcp
+  EcsSecurityGroupIngressFromsubnet2:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Ingress from external clients
+      GroupId: !Ref FargateContainerSecurityGroup
+      CidrIp: !Ref PrivateSubnet2CIDR
+      FromPort: !Ref ContainerPort
+      ToPort: !Ref ContainerPort
+      IpProtocol: tcp
+  ServiceLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+        LogGroupName: !Join ['/', [ecs, !Join ['-', [!Ref ServicePrefix1, !Ref 'AWS::StackName']]]]
+        RetentionInDays: 14
+
+  NetworkLoadBalancerSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Access to the public facing load balancer
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+          # Allow access to ALB from anywhere on the internet
+          - CidrIp: 0.0.0.0/0
+            IpProtocol: tcp
+            FromPort: !Ref ContainerPort
+            ToPort: !Ref ContainerPort
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      TargetType: ip
+      # Only use the stack name here because the full name can only be 32 characters, service prefix + stack name is often too long
+      Name: !Ref AWS::StackName
+      Port: !Ref ContainerPort
+      Protocol: TCP
+      VpcId: !Ref VpcId
+  # Create a rule on the load balancer for routing traffic to the target group
+  LoadBalancerListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - TargetGroupArn: !Ref TargetGroup
+          Type: forward
+      LoadBalancerArn: !Ref NetworkLoadBalancer
+      Port: !Ref ContainerPort
+      Protocol: TCP
+  NetworkLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: internal
+      Subnets:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      Tags:
+        -
+          Key: StackName
+          Value: !Ref AWS::StackName
+      Type: network
+  
+  
+  # Deploy API GW VPC Link
+#---------------------------------------------------------------------
+
+# Security group for APIGW VPC Link
+  APIGWVPClinkSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !Ref VpcId
+      GroupName: vpclink-security-group
+      GroupDescription: APIGW vpclink security group
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        CidrIp: 0.0.0.0/0
+
+  PrivateAPIGWvpcLink:  
+    Type: AWS::ApiGatewayV2::VpcLink
+    Properties: 
+      Name: private-apigw-vpclink
+      SecurityGroupIds: 
+        - !Ref APIGWVPClinkSG
+      SubnetIds: 
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+        
+        
+        
+        
+# Deploy API GW HTTP API route and integration to private NLB via VPC Link
+# -------------------------------------------------------------------------
+
+  HttpApiNLB:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: nlb-HTTP-api
+      Description: HTTP API NLB
+      ProtocolType: HTTP
+
+  APIRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApiNLB
+      RouteKey: 'ANY /'
+      Target: !Join
+        - /
+        - - integrations
+          - !Ref APIIntegration
+
+  APIIntegration:
+    DependsOn:
+      - NetworkLoadBalancer
+      - TargetGroup
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApiNLB
+      Description: Private NLB Integration
+      IntegrationType: HTTP_PROXY
+      IntegrationMethod: ANY
+      ConnectionType: VPC_LINK
+      ConnectionId: 
+        !Ref PrivateAPIGWvpcLink
+      IntegrationUri: 
+        !Ref LoadBalancerListener  
+      PayloadFormatVersion: '1.0'
+
+  APIStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      StageName: $default
+      AutoDeploy: true
+      ApiId: !Ref HttpApiNLB 
+      
+  GetMethod:
+    Type: AWS::ApiGateway::Method
+    DependsOn: VpcLink
+    Properties:
+      AuthorizationType: NONE
+      HttpMethod: GET
+  #RequestParameters:
+  #  method.request.path.proxy: true
+  Integration:
+    Type: HTTP
+    IntegrationHttpMethod: GET
+    Uri:
+      Fn::Join:
+      - ''
+      - - "http://"
+        - ${stageVariables.channelUrl}
+        - "/channels"
+        - "/stories"
+    IntegrationResponses:
+      - StatusCode: 200
+        ResponseParameters:
+          method.response.header.Access-Control-Allow-Origin: "'*'"
+        ResponseTemplates:
+          application/json: ''
+    RequestTemplates:
+      application/json: ''
+      ResourceId: !Ref ChannelsStoriesPath
+      RestApiId:
+        Ref: RestApi
+    MethodResponses:
+      - StatusCode: 200
+        ResponseParameters:
+          method.response.header.Access-Control-Allow-Origin: true
+
+    
